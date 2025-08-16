@@ -1,6 +1,4 @@
-import math
 import os
-from imaplib import Debug
 
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '1'
 
@@ -15,6 +13,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import logging
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
 import torch
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 import pandas as pd
 import numpy as np
 import logging
@@ -110,12 +110,14 @@ def worker_init(q):
 # ------------------ Service Classes ------------------
 
 class GPUUtilMonitor:
-    def __init__(self,
-                 gpu_index: int = 0,
-                 interval: float = 0.5,
-                 desc: str = "GPU Utilization"):
+    def __init__(self, gpu_index: int = 0, interval: float = 0.5, desc: str = "GPU Utilization"):
+        self.enabled = torch.cuda.is_available()
+        if not self.enabled:
+            return
+        from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex
         nvmlInit()
-        self.handle   = nvmlDeviceGetHandleByIndex(gpu_index)
+        self.handle = nvmlDeviceGetHandleByIndex(gpu_index)
+
         self.interval = interval
 
 
@@ -138,9 +140,13 @@ class GPUUtilMonitor:
             time.sleep(self.interval)
 
     def start(self):
+        if not hasattr(self, "enabled") or not self.enabled:
+            return
         self._thread.start()
 
     def stop(self):
+        if not hasattr(self, "enabled") or not self.enabled:
+            return
         self._stop_event.set()
         self._thread.join()
         self.bar.clear()
@@ -627,7 +633,7 @@ class FaceComparer:
         # a) build face‐face similarity
         F = torch.from_numpy(
             np.stack(face_embeddings_list, axis=0)
-        ).cuda()
+        ).to(DEVICE)
         Fn = torch.nn.functional.normalize(F, p=2, dim=1) #DeepFace is already returning L2-normalized embeddings for ArcFace
         S_face = torch.matmul(Fn, Fn.t())
 
@@ -1126,7 +1132,7 @@ class ImageAnalyzer:
         else:
             S_text = sim_data
 
-        S_text = S_text.cuda() if not S_text.is_cuda else S_text
+        S_text = S_text.to(DEVICE)# if not S_text.is_cuda else S_text
 
         # 3) --- FACE BONUS ---
         face_embeddings_list, image_to_face_index = self.face_comparer.collect_face_embeddings_cuda(paths)
@@ -1223,7 +1229,7 @@ class ImageAnalyzer:
         paths = batch_df['image_path'].tolist()
         text_emb = np.stack([np.array(json.loads(e), dtype=np.float32)
                              for e in batch_df['embedding']], axis=0)
-        T = torch.from_numpy(text_emb).cuda()
+        T = torch.from_numpy(text_emb).to(DEVICE)
         Tn = torch.nn.functional.normalize(T, p=2, dim=1)
         S_text = torch.matmul(Tn, Tn.t())
 
@@ -1292,7 +1298,7 @@ class ImageAnalyzer:
         paths = batch_df['image_path'].tolist()
         text_embs = np.stack([np.array(json.loads(e), dtype=np.float32)
                               for e in batch_df['embedding']], axis=0)
-        T = torch.from_numpy(text_embs).cuda()  # (N, D)
+        T = torch.from_numpy(text_embs).to(DEVICE)  # (N, D)
         Tn = torch.nn.functional.normalize(T, p=2, dim=1)  # unit‐length
         S_text = torch.matmul(Tn, Tn.t())  # (N, N)
 
@@ -1431,7 +1437,7 @@ class ImageAnalyzer:
         emb_cpu = np.stack(emb_list, axis=0)  # shape (N, D)
 
         # 2) move to GPU
-        emb = torch.from_numpy(emb_cpu).cuda()  # (N, D)
+        emb = torch.from_numpy(emb_cpu).to(DEVICE)  # (N, D)
         emb_norm = torch.nn.functional.normalize(emb, p=2, dim=1)
 
         # 3) full cosine‐similarity: sim_matrix[i,j] = emb_norm[i]·emb_norm[j]
@@ -1577,7 +1583,7 @@ def main():
 
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        folder_path = "C:/Users/user/PycharmProjects/pythonProject/pics/test_album"
+        folder_path = "C:/Users/user/PycharmProjects/memoline/test_album/album"
         analyzer = ImageAnalyzer(folder_path)
         analyzer.timestamp = timestamp
         analyzer.storage = ResultStorageParquet(timestamp)
